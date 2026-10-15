@@ -1,3 +1,4 @@
+
 from airflow.sdk import dag, task
 from airflow.hooks.base import BaseHook
 from airflow.providers.databricks.hooks.databricks import DatabricksHook
@@ -17,6 +18,7 @@ def test_cencora_databricks_connection():
     @task
     def check_connection():
         connection = BaseHook.get_connection("cencora_databricks")
+
         print(f"Connection found: {connection.conn_id}")
         print(f"Host configured: {bool(connection.host)}")
         print(f"Login configured: {bool(connection.login)}")
@@ -25,12 +27,12 @@ def test_cencora_databricks_connection():
         hook = DatabricksHook(
             databricks_conn_id="cencora_databricks"
         )
-        client = hook.get_conn()
 
-        # Read-only request; does not start a Databricks job.
-        current_user = client.current_user.me()
-        print("Databricks authentication succeeded.")
-        print(f"Authenticated identity details returned: {bool(current_user)}")
+        # Authenticate by making a read-only Databricks API request.
+        workspace_client = hook.get_conn()
+        workspace_client.jobs.list(limit=1)
+
+        print("Databricks API request succeeded.")
 
     check_connection()
 
