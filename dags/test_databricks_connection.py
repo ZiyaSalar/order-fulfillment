@@ -1,12 +1,11 @@
 from airflow.sdk import dag, task
-from airflow.hooks.base import BaseHook
 from airflow.providers.databricks.hooks.databricks import DatabricksHook
 import pendulum
 
 
 @dag(
     dag_id="test_cencora_databricks_connection",
-    description="Temporary diagnostic for the Databricks Airflow connection.",
+    description="Read-only Databricks connection test.",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     schedule=None,
     catchup=False,
@@ -16,20 +15,19 @@ def test_cencora_databricks_connection():
 
     @task
     def check_connection():
-        connection = BaseHook.get_connection("cencora_databricks")
-
-        print(f"Connection found: {connection.conn_id}")
-        print(f"Host configured: {bool(connection.host)}")
-        print(f"Login configured: {bool(connection.login)}")
-        print(f"Password configured: {bool(connection.password)}")
-
         hook = DatabricksHook(
             databricks_conn_id="cencora_databricks"
         )
 
-        result = hook.get_conn()
-        print(f"Hook result type: {type(result).__name__}")
-        print("Diagnostic completed; no Databricks job was started.")
+        success, message = hook.test_connection()
+        print(f"Databricks connection test: {message}")
+
+        if not success:
+            raise RuntimeError(
+                f"Databricks authentication test failed: {message}"
+            )
+
+        print("Databricks connection verified successfully.")
 
     check_connection()
 
