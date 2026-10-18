@@ -11,21 +11,35 @@ CONTAINER_NAME = "team3"
 
 LANDING_PREFIX = "landing/"
 
-EXPECTED_FILES = {
+SUPPORTED_FILES = {
     "orders.csv",
     "order_lines.csv",
     "shipment_lines.csv",
     "delivery_events.csv",
 }
 
+FULL_BATCH_FILES = {
+    "orders.csv",
+    "order_lines.csv",
+    "shipment_lines.csv",
+    "delivery_events.csv",
+}
+
+DELIVERY_ONLY_FILES = {
+    "delivery_events.csv",
+}
+
 BATCH_PATTERN = re.compile(
-    r"^landing/(batch_(\d{3}))/"
+    r"^landing/(batch_(\d{3}))/$"
 )
 
 
 @dag(
     dag_id="test_team3_dynamic_batch_discovery",
-    description="Detects the latest complete batch_NNN folder in Team 3 ADLS.",
+    description=(
+        "Detects the latest valid batch_NNN folder "
+        "in Team 3 ADLS."
+    ),
     start_date=pendulum.datetime(
         2026,
         1,
@@ -43,7 +57,7 @@ BATCH_PATTERN = re.compile(
 def test_team3_dynamic_batch_discovery():
 
     @task
-    def discover_latest_complete_batch():
+    def discover_latest_valid_batch():
 
         hook = WasbHook(
             wasb_conn_id=ADLS_CONN_ID
@@ -53,172 +67,225 @@ def test_team3_dynamic_batch_discovery():
         print("TEAM 3 - DYNAMIC BATCH DISCOVERY")
         print("=" * 70)
 
-        print(f"Container : {CONTAINER_NAME}")
-        print(f"Prefix    : {LANDING_PREFIX}")
-
         # --------------------------------------------------------
-        # 1. List everything under landing/
+        # 1. Discover folders under landing/
         # --------------------------------------------------------
 
-        blobs = hook.get_blobs_list(
+        landing_entries = hook.get_blobs_list(
             container_name=CONTAINER_NAME,
             prefix=LANDING_PREFIX,
         )
 
-        if not blobs:
+        if not landing_entries:
             raise ValueError(
-                f"No files found under "
-                f"{CONTAINER_NAME}/{LANDING_PREFIX}"
+                "No entries found under landing/."
             )
 
         print()
-        print(f"Total blob entries found: {len(blobs)}")
+        print("Entries under landing/:")
 
-        print()
-        print("RAW BLOB NAMES RETURNED BY WASB:")
-        print("=" * 70)
-
-        for blob_name in blobs:
-            print(repr(blob_name))
-
-        print("=" * 70)
+        for entry in landing_entries:
+            print(entry)
 
         # --------------------------------------------------------
-        # 2. Group files by batch_NNN
+        # 2. Identify only batch_NNN folders
         # --------------------------------------------------------
 
-        batches = {}
+        batches = []
 
-        for blob_name in blobs:
+        for entry in landing_entries:
 
-            match = BATCH_PATTERN.match(blob_name)
+            match = BATCH_PATTERN.match(entry)
 
             if not match:
+                print(
+                    f"Ignoring non-batch entry: {entry}"
+                )
                 continue
 
             batch_id = match.group(1)
             batch_number = int(match.group(2))
 
-            relative_file = blob_name[
-                len(f"{LANDING_PREFIX}{batch_id}/"):
-            ]
-
-            # Ignore fake directory entries if any
-            if not relative_file:
-                continue
-
-            batches.setdefault(
-                batch_id,
-                {
-                    "number": batch_number,
-                    "files": set(),
-                },
-            )
-
-            batches[batch_id]["files"].add(
-                relative_file
+            batches.append(
+                (
+                    batch_number,
+                    batch_id,
+                )
             )
 
         if not batches:
             raise ValueError(
-                "No valid batch_NNN folders were found."
+                "No valid batch_NNN directories found."
             )
 
-        print()
-        print("Detected batches:")
+        batches.sort(
+            key=lambda x: x[0]
+        )
 
-        for batch_id in sorted(
-            batches,
-            key=lambda b: batches[b]["number"],
-        ):
+        print()
+        print("Detected batch folders:")
+
+        for batch_number, batch_id in batches:
             print(
-                f"{batch_id}: "
-                f"{sorted(batches[batch_id]['files'])}"
+                f"{batch_id} "
+                f"(number={batch_number})"
             )
 
         # --------------------------------------------------------
-        # 3. Determine which batches are COMPLETE
+        # 3. Inspect files INSIDE every batch
         # --------------------------------------------------------
 
-        complete_batches = []
+        valid_batches = []
 
         print()
         print("=" * 70)
-        print("BATCH COMPLETENESS CHECK")
+        print("BATCH VALIDATION")
         print("=" * 70)
 
-        for batch_id, info in batches.items():
+        for batch_number, batch_id in batches:
 
-            actual_files = {
-                file_name.split("/")[-1]
-                for file_name in info["files"]
-            }
-
-            missing_files = (
-                EXPECTED_FILES - actual_files
+            batch_prefix = (
+                f"{LANDING_PREFIX}"
+                f"{batch_id}/"
             )
 
-            if not missing_files:
+            batch_entries = hook.get_blobs_list(
+                container_name=CONTAINER_NAME,
+                prefix=batch_prefix,
+            )
+
+            actual_files = set()
+
+            for entry in batch_entries:
+
+                # Ignore the directory marker itself
+                if entry == batch_prefix:
+                    continue
+
+                relative_name = entry[
+                    len(batch_prefix):
+                ]
+
+                # Only consider direct CSV files
+                if (
+                    relative_name
+                    and "/" not in relative_name
+                ):
+                    actual_files.add(
+                        relative_name
+                    )
+
+            print()
+            print(f"{batch_id}:")
+            print(
+                f"  Files: "
+                f"{sorted(actual_files)}"
+            )
+
+            # ----------------------------------------------------
+            # Classify the batch
+            # ----------------------------------------------------
+
+            if FULL_BATCH_FILES.issubset(
+                actual_files
+            ):
+
+                batch_type = "FULL"
 
                 print(
-                    f"{batch_id}: COMPLETE"
+                    "  Type : FULL"
                 )
 
-                complete_batches.append(
-                    (
-                        info["number"],
-                        batch_id,
-                    )
+            elif DELIVERY_ONLY_FILES.issubset(
+                actual_files
+            ):
+
+                batch_type = "DELIVERY_ONLY"
+
+                print(
+                    "  Type : DELIVERY_ONLY"
                 )
 
             else:
 
                 print(
-                    f"{batch_id}: INCOMPLETE"
+                    "  Type : INVALID"
                 )
+
+                continue
+
+            unsupported_files = (
+                actual_files
+                - SUPPORTED_FILES
+            )
+
+            if unsupported_files:
 
                 print(
-                    f"  Missing: "
-                    f"{sorted(missing_files)}"
+                    "  WARNING - additional files: "
+                    f"{sorted(unsupported_files)}"
                 )
 
-        if not complete_batches:
-            raise ValueError(
-                "No complete batch_NNN folders were found."
+            valid_batches.append(
+                {
+                    "batch_number": batch_number,
+                    "batch_id": batch_id,
+                    "batch_type": batch_type,
+                    "batch_prefix": batch_prefix,
+                    "files": sorted(
+                        actual_files
+                    ),
+                }
             )
 
         # --------------------------------------------------------
-        # 4. Select numerically latest COMPLETE batch
+        # 4. Ensure at least one valid batch exists
         # --------------------------------------------------------
 
-        complete_batches.sort(
-            key=lambda item: item[0]
-        )
+        if not valid_batches:
 
-        latest_number, latest_batch = (
-            complete_batches[-1]
-        )
+            raise ValueError(
+                "No valid processable batch_NNN "
+                "folders were found."
+            )
 
-        batch_prefix = (
-            f"{LANDING_PREFIX}"
-            f"{latest_batch}/"
+        # --------------------------------------------------------
+        # 5. Select highest numbered valid batch
+        # --------------------------------------------------------
+
+        latest_batch = max(
+            valid_batches,
+            key=lambda x: x["batch_number"],
         )
 
         print()
         print("=" * 70)
-        print("LATEST COMPLETE BATCH")
+        print("LATEST VALID BATCH")
         print("=" * 70)
 
         print(
-            f"Batch ID     : {latest_batch}"
+            f"Batch ID     : "
+            f"{latest_batch['batch_id']}"
         )
 
         print(
-            f"Batch number : {latest_number}"
+            f"Batch number : "
+            f"{latest_batch['batch_number']}"
         )
 
         print(
-            f"Batch prefix : {batch_prefix}"
+            f"Batch type   : "
+            f"{latest_batch['batch_type']}"
+        )
+
+        print(
+            f"Batch prefix : "
+            f"{latest_batch['batch_prefix']}"
+        )
+
+        print(
+            f"Files        : "
+            f"{latest_batch['files']}"
         )
 
         print()
@@ -228,14 +295,10 @@ def test_team3_dynamic_batch_discovery():
 
         print("=" * 70)
 
-        # Small metadata is safe for XCom.
-        return {
-            "batch_id": latest_batch,
-            "batch_number": latest_number,
-            "batch_prefix": batch_prefix,
-        }
+        # Small metadata only through XCom
+        return latest_batch
 
-    discover_latest_complete_batch()
+    discover_latest_valid_batch()
 
 
 test_team3_dynamic_batch_discovery()
