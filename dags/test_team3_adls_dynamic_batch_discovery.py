@@ -74,6 +74,15 @@ def test_team3_dynamic_batch_discovery():
         print()
         print(f"Total blob entries found: {len(blobs)}")
 
+        print()
+        print("RAW BLOB NAMES RETURNED BY WASB:")
+        print("=" * 70)
+
+        for blob_name in blobs:
+            print(repr(blob_name))
+
+        print("=" * 70)
+
         # --------------------------------------------------------
         # 2. Group files by batch_NNN
         # --------------------------------------------------------
