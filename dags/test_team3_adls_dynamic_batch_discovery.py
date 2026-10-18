@@ -1,8 +1,11 @@
 import re
 import pendulum
 
+from airflow.models import Variable
+from airflow.exceptions import AirflowSkipException
 from airflow.sdk import dag, task
 from airflow.providers.microsoft.azure.hooks.wasb import WasbHook
+
 
 
 ADLS_CONN_ID = "cencora_adls"
@@ -258,44 +261,57 @@ def test_team3_dynamic_batch_discovery():
             key=lambda x: x["batch_number"],
         )
 
+        last_successful_batch = Variable.get(
+            "team3_last_successful_batch",
+            default_var=None,
+        )
+
         print()
         print("=" * 70)
-        print("LATEST VALID BATCH")
+        print("NEW BATCH CHECK")
         print("=" * 70)
 
         print(
-            f"Batch ID     : "
+            f"Latest ADLS batch       : "
             f"{latest_batch['batch_id']}"
         )
 
         print(
-            f"Batch number : "
-            f"{latest_batch['batch_number']}"
+            f"Last successful batch   : "
+            f"{last_successful_batch}"
         )
 
-        print(
-            f"Batch type   : "
-            f"{latest_batch['batch_type']}"
-        )
+        if last_successful_batch:
 
-        print(
-            f"Batch prefix : "
-            f"{latest_batch['batch_prefix']}"
-        )
+            last_successful_number = int(
+                last_successful_batch.split("_")[1]
+            )
 
-        print(
-            f"Files        : "
-            f"{latest_batch['files']}"
-        )
+            if (
+                latest_batch["batch_number"]
+                <= last_successful_number
+            ):
+
+                print()
+                print(
+                    "No new batch available."
+                )
+
+                print(
+                    f"{latest_batch['batch_id']} "
+                    "has already been processed."
+                )
+
+                raise AirflowSkipException(
+                    "No new ADLS batch available."
+                )
 
         print()
         print(
-            "DYNAMIC BATCH DISCOVERY PASSED."
+            f"NEW BATCH FOUND: "
+            f"{latest_batch['batch_id']}"
         )
 
-        print("=" * 70)
-
-        # Small metadata only through XCom
         return latest_batch
 
     discover_latest_valid_batch()
