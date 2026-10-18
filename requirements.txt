@@ -1,3 +1,5 @@
-
-# Databricks provider compatible with the current Astro Runtime
+# Databricks provider
 apache-airflow-providers-databricks==7.16.0
+
+# Microsoft Azure provider for WASB / Azure Storage
+apache-airflow-providers-microsoft-azure==15.2.1
