@@ -14,6 +14,12 @@ from airflow.providers.microsoft.azure.hooks.wasb import WasbHook
 from airflow.providers.databricks.operators.databricks import (
     DatabricksRunNowOperator,
 )
+from new_relic_telemetry import (
+    new_relic_task_retry,
+    new_relic_task_failure,
+    new_relic_dag_failure,
+    new_relic_pipeline_success,
+)
 
 
 # ============================================================
@@ -129,7 +135,7 @@ GOLD_JOB_ID = 119334250861014
     #
     # --------------------------------------------------------
 
-    schedule=None,
+    schedule="*/5 * * * *",
 
     catchup=False,
 
@@ -144,8 +150,12 @@ GOLD_JOB_ID = 119334250861014
         "execution_timeout": timedelta(
             hours=2
         ),
+        "on_retry_callback": new_relic_task_retry,
+        "on_failure_callback": new_relic_task_failure,
     },
 
+    on_failure_callback=new_relic_dag_failure,
+    on_success_callback=new_relic_pipeline_success,
     tags=[
         "team3",
         "adls",
@@ -567,6 +577,7 @@ def cencora_team_3_order_fulfilment():
             ),
 
             job_id=BRONZE_JOB_ID,
+            do_xcom_push=True,
 
             notebook_params={
                 "input_batch": (
@@ -596,6 +607,7 @@ def cencora_team_3_order_fulfilment():
             ),
 
             job_id=SILVER_JOB_ID,
+            do_xcom_push=True,
 
             notebook_params={
                 "catalog": (
@@ -642,6 +654,7 @@ def cencora_team_3_order_fulfilment():
             ),
 
             job_id=GOLD_JOB_ID,
+            do_xcom_push=True,
 
             notebook_params={
                 "catalog": (
