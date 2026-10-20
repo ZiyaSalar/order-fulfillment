@@ -14,7 +14,7 @@ from airflow.providers.microsoft.azure.hooks.wasb import WasbHook
 from airflow.providers.databricks.operators.databricks import (
     DatabricksRunNowOperator,
 )
-from new_relic_telemetry import (
+from include.new_relic_telemetry import (
     new_relic_task_retry,
     new_relic_task_failure,
     new_relic_dag_failure,
