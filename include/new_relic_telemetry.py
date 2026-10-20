@@ -236,43 +236,81 @@ def new_relic_dag_failure(context: Dict[str, Any]) -> None:
 
 
 def new_relic_pipeline_success(context: Dict[str, Any]) -> None:
-    """Emit completion only when mark_batch_successful actually succeeded.
+    """Publish SUCCESS only when a real batch completed."""
 
-    A no-new-batch run intentionally skips downstream tasks. Such a no-op DAG must
-    remain successful, but it is not reported as a completed data-processing run.
-    """
     try:
-        dag_run = context.get("dag_run")
-        ti = context.get("task_instance") or context.get("ti")
-        mark_ti = None
-        if dag_run is not None:
-            try:
-                mark_ti = dag_run.get_task_instance("mark_batch_successful")
-            except Exception as exc:
-                LOG.warning("Could not inspect mark_batch_successful state: %s", _safe_text(exc))
+        ti = (
+            context.get("task_instance")
+            or context.get("ti")
+        )
 
-        if mark_ti is None or str(getattr(mark_ti, "state", "")).lower() != "success":
-            LOG.info("No pipeline_completion event: mark_batch_successful did not succeed (no-op/skip run).")
+        marked_batch = _xcom_pull(
+            ti,
+            "mark_batch_successful"
+        )
+
+        # No-new-batch runs intentionally skip downstream tasks.
+        # Therefore there will be no batch returned by
+        # mark_batch_successful.
+        if not marked_batch:
+            LOG.info(
+                "No pipeline_completion event: "
+                "mark_batch_successful returned no batch. "
+                "This was most likely a no-op/skip run."
+            )
             return
 
-        event = _base_event(context, "pipeline_completion", "SUCCESS", "dag")
-        if not event.get("batchId"):
-            marked_batch = _xcom_pull(ti, "mark_batch_successful")
-            if marked_batch:
-                event["batchId"] = str(marked_batch)
-                event["inputBatch"] = str(marked_batch)
+        event = _base_event(
+            context,
+            "pipeline_completion",
+            "SUCCESS",
+            "dag",
+        )
+
+        event["batchId"] = str(marked_batch)
+        event["inputBatch"] = str(marked_batch)
         event["taskId"] = "mark_batch_successful"
 
-        # Include all three Databricks run IDs when their operator XCom exposes them.
+        # Add Databricks run IDs when the provider exposes them.
         for task_id, field in (
-            ("bronze_ingestion", "bronzeDatabricksRunId"),
-            ("silver_validation", "silverDatabricksRunId"),
-            ("gold_processing", "goldDatabricksRunId"),
+            (
+                "bronze_ingestion",
+                "bronzeDatabricksRunId",
+            ),
+            (
+                "silver_validation",
+                "silverDatabricksRunId",
+            ),
+            (
+                "gold_processing",
+                "goldDatabricksRunId",
+            ),
         ):
-            value = _databricks_run_id(ti, task_id)
+            value = _databricks_run_id(
+                ti,
+                task_id,
+            )
+
             if value:
                 event[field] = value
-        event["databricksRunId"] = event.get("goldDatabricksRunId")
+
+        if event.get("goldDatabricksRunId"):
+            event["databricksRunId"] = (
+                event["goldDatabricksRunId"]
+            )
+
+        LOG.info(
+            "Publishing successful pipeline telemetry: "
+            "airflowRunId=%s batchId=%s",
+            event.get("airflowRunId"),
+            event.get("batchId"),
+        )
+
         publish_new_relic_event(event)
+
     except Exception as exc:
-        LOG.exception("Pipeline success callback failed without changing DAG outcome: %s", _safe_text(exc))
+        LOG.exception(
+            "Pipeline success telemetry callback failed "
+            "without changing DAG outcome: %s",
+            _safe_text(exc),
+        )
